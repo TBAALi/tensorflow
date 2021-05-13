@@ -20,7 +20,9 @@ limitations under the License.
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Value.h"
 #include "tensorflow/compiler/xla/layout_util.h"
+#include "tensorflow/compiler/xla/permutation_util.h"
 #include "tensorflow/compiler/xla/service/llvm_ir/llvm_util.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/statusor.h"
@@ -70,6 +72,32 @@ void IrArray::Index::Delinearize(std::vector<llvm::Value*>* multidim,
   }
 }
 
+void IrArray::Index::Delinearize(std::vector<llvm::Value*>* multidim,
+                                 llvm::Value* linear, const Shape& shape,
+                                 absl::Span<llvm::Value*> dynamic_dims,
+                                 llvm::IRBuilder<>* b) const {
+  CHECK_EQ(shape.dimensions_size(), dynamic_dims.size());
+  CHECK_EQ(multidim_.size(), shape.rank());
+  llvm::Value* divisor = GetConstantWithIndexType(1);
+  const Layout& layout = shape.layout();
+  for (int64 i = 0; i < layout.minor_to_major_size(); ++i) {
+    int64 dimension = layout.minor_to_major(i);
+
+    // If i is not the last dimension, compute
+    //   (linear_index / divisor) % current_dimension.
+    // If i is the last dimension, we can skip the mod, because we assume that
+    // linear is in bounds.
+    auto* quot = b->CreateUDiv(linear, divisor, "quot");
+    if (i < layout.minor_to_major_size() - 1) {
+      (*multidim)[dimension] =
+          b->CreateURem(quot, dynamic_dims[dimension], "dim_value");
+      divisor = b->CreateMul(divisor, dynamic_dims[dimension], "divisor");
+    } else {
+      (*multidim)[dimension] = quot;
+    }
+  }
+}
+
 IrArray::Index::Index(llvm::Value* linear, const Shape& shape,
                       llvm::IRBuilder<>* b)
     : multidim_(shape.rank()),
@@ -82,6 +110,47 @@ IrArray::Index::Index(llvm::Value* linear, const Shape& shape,
       << "Shape " << ShapeUtil::HumanStringWithLayout(shape)
       << " should have a layout.";
   Delinearize(&multidim_, linear, shape, b);
+}
+
+IrArray::Index::Index(llvm::Value* linear,
+                      absl::Span<llvm::Value* const> multidim,
+                      const Shape& shape, llvm::IRBuilder<>* b)
+    : multidim_(shape.rank()),
+      linear_(linear),
+      layout_(shape.layout()),
+      dims_(shape.dimensions().begin(), shape.dimensions().end()) {
+  CHECK_NE(linear, nullptr);
+  index_type_ = linear->getType();
+  CHECK_EQ(multidim.size(), shape.rank());
+  for (auto dim : multidim) {
+    if (dim) {
+      CHECK_EQ(dim->getType(), index_type_);
+    }
+  }
+  CHECK(LayoutUtil::HasLayout(shape))
+      << "Shape " << ShapeUtil::HumanStringWithLayout(shape)
+      << " should have a layout.";
+  Delinearize(&multidim_, linear, shape, b);
+  for (int i = 0; i < multidim.size(); ++i) {
+    if (multidim[i] != nullptr) {
+      multidim_[i] = multidim[i];
+    }
+  }
+}
+
+IrArray::Index::Index(llvm::Value* linear, const Shape& shape,
+                      absl::Span<llvm::Value*> dynamic_dims,
+                      llvm::IRBuilder<>* b)
+    : multidim_(shape.rank()),
+      linear_(linear),
+      layout_(shape.layout()),
+      dims_(shape.dimensions().begin(), shape.dimensions().end()) {
+  CHECK_NE(linear, nullptr);
+  index_type_ = linear->getType();
+  CHECK(LayoutUtil::HasLayout(shape))
+      << "Shape " << ShapeUtil::HumanStringWithLayout(shape)
+      << " should have a layout.";
+  Delinearize(&multidim_, linear, shape, dynamic_dims, b);
 }
 
 IrArray::Index::Index(absl::Span<llvm::Value* const> multidim,
@@ -243,7 +312,7 @@ IrArray::Index IrArray::Index::SourceIndexOfTranspose(
     const Shape& shape, const Shape& operand_shape,
     absl::Span<const int64> dimension_mapping) const {
   std::vector<llvm::Value*> operand_multidim_index =
-      Permute(dimension_mapping, multidim());
+      PermuteInverse(multidim(), dimension_mapping);
 
   if (linear() != nullptr && LayoutUtil::HasLayout(operand_shape) &&
       LayoutUtil::HasLayout(shape) &&
@@ -301,7 +370,7 @@ IrArray::Index IrArray::Index::SourceIndexOfBroadcast(
     source_index[i] = multidim_[dimension_mapping[i]];
   }
   if (linear_ == nullptr || !LayoutUtil::HasLayout(operand_shape) ||
-      !LayoutUtil::HasLayout(shape)) {
+      !LayoutUtil::HasLayout(shape) || rank == 1) {
     return Index(source_index, operand_shape, index_type_);
   }
   // High-level idea: we can reuse the linear index if the broadcasted
@@ -373,6 +442,28 @@ llvm::Value* IrArray::Index::Linearize(absl::Span<const int64> dimensions,
   return logical_linear_index;
 }
 
+llvm::Value* IrArray::Index::Linearize(
+    const std::vector<llvm::Value*>& dynamic_dims,
+    llvm::IRBuilder<>* builder) const {
+  // Each dimension is multiplied by the product of the sizes of all
+  // earlier dimensions and added to the accumulator logical_linear_index.
+  CHECK_EQ(size(), dynamic_dims.size());
+  llvm::Value* logical_linear_index = GetConstantWithIndexType(0);
+  llvm::Value* multiplier = GetConstantWithIndexType(1);
+  for (ssize_t i = size() - 1; i >= 0; --i) {
+    llvm::Value* addend = builder->CreateMul((*this)[i], multiplier, "",
+                                             /*HasNUW=*/true, /*HasNSW=*/true);
+    addend = builder->CreateZExtOrTrunc(addend, index_type_);
+    logical_linear_index = builder->CreateAdd(logical_linear_index, addend, "",
+                                              /*HasNUW=*/true, /*HasNSW=*/true);
+    if (i) {
+      multiplier = builder->CreateMul(multiplier, dynamic_dims[i],
+                                      /*Name=*/"multiplier");
+    }
+  }
+  return logical_linear_index;
+}
+
 llvm::Value* IrArray::EmitArrayElementAddress(const IrArray::Index& index,
                                               llvm::IRBuilder<>* b,
                                               absl::string_view name,
@@ -439,7 +530,7 @@ llvm::Value* IrArray::EmitReadArrayElement(const Index& index,
                                            bool use_linear_index) const {
   llvm::Value* element_address =
       EmitArrayElementAddress(index, b, name, use_linear_index);
-  llvm::LoadInst* load = b->CreateLoad(element_address);
+  llvm::LoadInst* load = b->CreateLoad(element_address, name.data());
   AnnotateLoadStoreInstructionWithMetadata(load);
   return load;
 }
@@ -461,6 +552,28 @@ IrArray IrArray::CastToShape(const Shape& new_shape,
       b->CreatePointerCast(base_ptr_, new_ir_type->getPointerTo()), new_shape);
   new_irarray.metadata_ = metadata_;
   return new_irarray;
+}
+
+bool IrArray::Index::ShapeIsCompatible(const Shape& a, const Shape& b) {
+  // Compute strides for two sides of the comparison. Sometimes different shapes
+  // give the same strides:
+  //   [10, 20, 30, 1]{3,2,1,0} vs [10, 20, 1, 30]{3,2,1,0}
+  // which should be considered compatible.
+  const auto get_strides = [](const Shape& shape) {
+    int rank = shape.dimensions().size();
+    int64 stride = 1;
+    std::vector<int64> strides;
+    for (int i = 0; i < rank; i++) {
+      auto dim = shape.dimensions(shape.layout().minor_to_major(i));
+      if (dim != 1) {
+        stride *= dim;
+        strides.push_back(stride);
+      }
+    }
+    return strides;
+  };
+
+  return get_strides(a) == get_strides(b);
 }
 
 }  // namespace llvm_ir

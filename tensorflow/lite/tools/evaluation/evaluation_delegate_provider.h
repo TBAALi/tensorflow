@@ -20,7 +20,8 @@ limitations under the License.
 #include <unordered_map>
 #include <vector>
 
-#include "tensorflow/lite/tools/benchmark/delegate_provider.h"
+#include "tensorflow/lite/tools/command_line_flags.h"
+#include "tensorflow/lite/tools/delegates/delegate_provider.h"
 #include "tensorflow/lite/tools/evaluation/proto/evaluation_stages.pb.h"
 #include "tensorflow/lite/tools/evaluation/utils.h"
 #include "tensorflow/lite/tools/tool_params.h"
@@ -32,8 +33,11 @@ class DelegateProviders {
  public:
   DelegateProviders();
 
+  // Returns a list of commandline flags that delegate providers define.
+  std::vector<Flag> GetFlags();
+
   // Initialize delegate-related parameters from commandline arguments and
-  // returns true if sucessful.
+  // returns true if successful.
   bool InitFromCmdlineArgs(int* argc, const char** argv);
 
   // Get all parameters from all registered delegate providers.
@@ -73,7 +77,7 @@ class DelegateProviders {
   // flags.
   tools::ToolParams params_;
 
-  const benchmark::DelegateProviderList& delegates_list_;
+  const tools::DelegateProviderList& delegates_list_;
   // Key is the delegate name, and the value is the index to the
   // 'delegates_list_'.
   const std::unordered_map<std::string, int> delegates_map_;

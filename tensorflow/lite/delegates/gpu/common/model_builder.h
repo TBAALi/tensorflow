@@ -16,21 +16,24 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_DELEGATES_GPU_COMMON_MODEL_BUILDER_H_
 #define TENSORFLOW_LITE_DELEGATES_GPU_COMMON_MODEL_BUILDER_H_
 
-#include <cstdint>
-#include <string>
-#include <unordered_map>
-
-#include "tensorflow/lite/context.h"
+#include "absl/container/flat_hash_map.h"
+#include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
+#include "tensorflow/lite/delegates/gpu/common/shape.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
+#include "tensorflow/lite/delegates/gpu/common/tensor.h"
 
 namespace tflite {
 namespace gpu {
 
 // Validates which operations are supported and returns array of operations to
 // replace with GPU kernels. The caller must free the pointer on TfLiteIntArray.
+// 'max_delegated_partitions' limits the maximum number of partitions to
+// delegate as a graph could possibly have multiple partitions (each partition
+// consists of a subset of ops) to be replaced.
 TfLiteIntArray* GetOpsToReplace(TfLiteContext* context,
-                                bool allow_quant_ops = false);
+                                bool allow_quant_ops = false,
+                                int max_delegated_partitions = 1);
 
 // Extracts TFLite delegate execution plan from the input TFLite context and
 // converts it into generic graph format.
@@ -44,7 +47,16 @@ TfLiteIntArray* GetOpsToReplace(TfLiteContext* context,
 absl::Status BuildModel(
     TfLiteContext* context, const TfLiteDelegateParams* delegate_params,
     GraphFloat32* graph,
-    std::unordered_map<int, int>* quant_conversion_map = nullptr);
+    absl::flat_hash_map<int, int>* quant_conversion_map = nullptr);
+
+// Same as BuildModel, but enforces user-provided input/output indices instead
+// of using delegate_params->inputs and delegate_params->outputs for
+// inputs/outputs preallocating.
+absl::Status BuildModelEnforceIO(
+    TfLiteContext* context, const TfLiteDelegateParams* delegate_params,
+    const std::vector<int>& input_ids, const std::vector<int>& output_ids,
+    GraphFloat32* graph,
+    absl::flat_hash_map<int, int>* quant_conversion_map = nullptr);
 
 // Same as above but also apply all transformations on the final graph.
 // Prefer using this method instead of BuildModel.
@@ -58,7 +70,7 @@ absl::Status BuildModel(
 absl::Status BuildFinalModel(
     TfLiteContext* context, const TfLiteDelegateParams* delegate_params,
     GraphFloat32* graph,
-    std::unordered_map<int, int>* quant_conversion_map = nullptr);
+    absl::flat_hash_map<int, int>* quant_conversion_map = nullptr);
 
 // Module-internal converter, exposed for unit testing purpose only.
 absl::Status ConvertTfLiteTensorToTensorRef(const TfLiteTensor& tflite_tensor,

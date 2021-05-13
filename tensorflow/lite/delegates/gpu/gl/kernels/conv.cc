@@ -39,6 +39,10 @@ class Convolution : public NodeShader {
  public:
   absl::Status GenerateCode(const GenerationContext& ctx,
                             GeneratedCode* generated_code) const final {
+    if (ctx.input_shapes.size() != 1) {
+      return absl::UnimplementedError(
+          "Convolution does not support more than 1 runtime tensor");
+    }
     const auto& attr =
         absl::any_cast<const Convolution2DAttributes&>(ctx.op_attr);
     auto weights = attr.weights.shape;
@@ -55,7 +59,7 @@ class Convolution : public NodeShader {
           {"dilation_h", attr.dilations.h},
           {"kernel_w", weights.w},
           {"kernel_h", weights.h},
-          {"src_depth", IntegralDivideRoundUp(weights.i, 4)},
+          {"src_depth", DivideRoundUp(weights.i, 4)},
           {"stride", int2(attr.strides.w, attr.strides.h)},
       };
     } else {
@@ -71,7 +75,7 @@ class Convolution : public NodeShader {
           {"input_data_0_w", static_cast<int>(ctx.input_shapes[0][2])},
           {"offsets_count", offsets_count},
           {"offsets", offsets},
-          {"src_depth", IntegralDivideRoundUp(weights.i, 4)},
+          {"src_depth", DivideRoundUp(weights.i, 4)},
           {"stride", int2(attr.strides.w, attr.strides.h)},
       };
     }
@@ -130,7 +134,7 @@ class Convolution : public NodeShader {
         /*workload=*/uint3(),
         /*workgroup=*/
         GetIdealWorkgroupIfPossible(
-            ctx.gpu_info->gpu_model, OperationType::CONVOLUTION_2D,
+            *ctx.gpu_info, OperationType::CONVOLUTION_2D,
             HW(weights.h, weights.w), attr.strides, uint3(0, 0, 0),
             OHWI(weights.o, ctx.input_shapes[0][1], ctx.input_shapes[0][2],
                  ctx.input_shapes[0][3])),
@@ -145,8 +149,10 @@ class Convolution : public NodeShader {
 int SelectMultiplier(int32_t input_width,
                      const NodeShader::GenerationContext& ctx) {
   std::vector<int> multipliers = {4, 2};
-  if (!ctx.compiler_options.allow_precision_loss &&
-      ctx.gpu_info->type == GpuType::MALI) {
+  if (ctx.gpu_info->IsAMD()) {
+    return 1;
+  }
+  if (!ctx.compiler_options.allow_precision_loss && ctx.gpu_info->IsMali()) {
     multipliers = {2};
   }
   for (int i : multipliers) {
@@ -161,6 +167,10 @@ class Convolution1x1 : public NodeShader {
  public:
   absl::Status GenerateCode(const GenerationContext& ctx,
                             GeneratedCode* generated_code) const final {
+    if (ctx.input_shapes.size() != 1) {
+      return absl::UnimplementedError(
+          "Convolution does not support more than 1 runtime tensor");
+    }
     const auto& attr =
         absl::any_cast<const Convolution2DAttributes&>(ctx.op_attr);
     if (attr.weights.shape.h != 1 || attr.weights.shape.w != 1) {
@@ -181,14 +191,14 @@ class Convolution1x1 : public NodeShader {
 
     std::vector<Variable> parameters = {
         {"src_depth",
-         IntegralDivideRoundUp(static_cast<int>(ctx.input_shapes[0][3]), 4)},
+         DivideRoundUp(static_cast<int>(ctx.input_shapes[0][3]), 4)},
     };
 
     std::vector<std::pair<std::string, Object>> objects = {
-        {"weights", MakeReadonlyObject(
-                        uint3(4, IntegralDivideRoundUp(attr.weights.shape.i, 4),
-                              IntegralDivideRoundUp(attr.weights.shape.o, 4)),
-                        ConvertToPHWO4I4(attr.weights))}};
+        {"weights",
+         MakeReadonlyObject(uint3(4, DivideRoundUp(attr.weights.shape.i, 4),
+                                  DivideRoundUp(attr.weights.shape.o, 4)),
+                            ConvertToPHWO4I4(attr.weights))}};
     std::string source;
     for (int i = 0; i < multiplier; i++) {
       absl::StrAppend(&source, "highp vec4 result", i, " = vec4(0);\n");
@@ -224,9 +234,9 @@ class Convolution1x1 : public NodeShader {
       absl::StrAppend(&source, "value_0 = result0;\n");
     }
 
-    auto dst_depth = IntegralDivideRoundUp(ctx.output_shapes[0][3], 4);
+    auto dst_depth = DivideRoundUp(ctx.output_shapes[0][3], 4);
     uint3 workgroup = uint3(16, 16, 1);
-    if (ctx.gpu_info->type == GpuType::ADRENO) {
+    if (ctx.gpu_info->IsAdreno()) {
       if (dst_depth >= 2) {
         workgroup = uint3(8, 8, 2);
       }
@@ -265,10 +275,10 @@ class Convolution1x1 : public NodeShader {
         /*shared_variables=*/{},
         /*workload=*/
         uint3(ctx.output_shapes[0][2] / multiplier, ctx.output_shapes[0][1],
-              IntegralDivideRoundUp(ctx.output_shapes[0][3], 4)),
+              DivideRoundUp(ctx.output_shapes[0][3], 4)),
         /*workgroup=*/
         GetIdealWorkgroupIfPossible(
-            ctx.gpu_info->gpu_model, OperationType::CONVOLUTION_2D,
+            *ctx.gpu_info, OperationType::CONVOLUTION_2D,
             HW(attr.weights.shape.h, attr.weights.shape.w), attr.strides,
             workgroup,
             OHWI(attr.weights.shape.o, ctx.input_shapes[0][1],

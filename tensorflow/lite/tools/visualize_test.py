@@ -35,9 +35,9 @@ class VisualizeTest(test_util.TensorFlowTestCase):
     self.assertEqual('HASHTABLE_LOOKUP', visualize.BuiltinCodeToName(10))
 
   def testFlatbufferToDict(self):
-    model_data = test_utils.build_mock_model()
-    model_dict = visualize.CreateDictFromFlatbuffer(model_data)
-    self.assertEqual(0, model_dict['version'])
+    model = test_utils.build_mock_flatbuffer_model()
+    model_dict = visualize.CreateDictFromFlatbuffer(model)
+    self.assertEqual(test_utils.TFLITE_SCHEMA_VERSION, model_dict['version'])
     self.assertEqual(1, len(model_dict['subgraphs']))
     self.assertEqual(1, len(model_dict['operator_codes']))
     self.assertEqual(3, len(model_dict['buffers']))
@@ -45,18 +45,13 @@ class VisualizeTest(test_util.TensorFlowTestCase):
     self.assertEqual(0, model_dict['subgraphs'][0]['tensors'][0]['buffer'])
 
   def testVisualize(self):
-    model_data = test_utils.build_mock_model()
-
+    model = test_utils.build_mock_flatbuffer_model()
     tmp_dir = self.get_temp_dir()
     model_filename = os.path.join(tmp_dir, 'model.tflite')
     with open(model_filename, 'wb') as model_file:
-      model_file.write(model_data)
-    html_filename = os.path.join(tmp_dir, 'visualization.html')
+      model_file.write(model)
 
-    visualize.CreateHtmlFile(model_filename, html_filename)
-
-    with open(html_filename, 'r') as html_file:
-      html_text = html_file.read()
+    html_text = visualize.create_html(model_filename)
 
     # It's hard to test debug output without doing a full HTML parse,
     # but at least sanity check that expected identifiers are present.

@@ -27,6 +27,11 @@ TEST(DatasetTest, RegisterDatasetOp) {
   EXPECT_FALSE(data::DatasetOpRegistry::IsRegistered("InvalidDatasetOp"));
 }
 
+TEST(DatasetTest, FullName) {
+  EXPECT_EQ(data::FullName("prefix", "name"),
+            "60d899aa0d8ce4351e7c3b419e92d25b|prefix:name");
+}
+
 enum DataTypeTest {
   _tf_int_32,
   _tf_int_64,
@@ -91,27 +96,52 @@ INSTANTIATE_TEST_SUITE_P(
         {_tf_string_, tensor_strs,
          static_cast<int64>(sizeof(str) + str.size()) /*bytes*/}}));
 
-TEST(DatasetTest, JobServiceTokenIsEmpty) {
-  data::JobToken token;
-  EXPECT_TRUE(token.is_empty());
+struct MergeOptionsTestParam {
+  const std::string source;
+  const std::string destination;
+  const std::string expected;
+};
+
+class MergeOptionsTest
+    : public ::testing::TestWithParam<MergeOptionsTestParam> {};
+
+TEST_P(MergeOptionsTest, MergeOptions) {
+  const MergeOptionsTestParam& test_case = GetParam();
+  data::Options source;
+  CHECK(tensorflow::protobuf::TextFormat::ParseFromString(test_case.source,
+                                                          &source));
+  data::Options destination;
+  CHECK(tensorflow::protobuf::TextFormat::ParseFromString(test_case.destination,
+                                                          &destination));
+  data::Options expected;
+  CHECK(tensorflow::protobuf::TextFormat::ParseFromString(test_case.expected,
+                                                          &expected));
+  data::internal::MergeOptions(source, &destination);
+  EXPECT_EQ(expected.SerializeAsString(), destination.SerializeAsString());
 }
 
-TEST(DatasetTest, JobTokenHoldsJobId) {
-  int64 job_id = 5;
-  data::JobToken token(job_id);
-  EXPECT_EQ(job_id, token.job_id());
-  EXPECT_FALSE(token.is_empty());
-}
-
-TEST(DatasetTest, JobTokenEncodeDecode) {
-  int64 job_id = 5;
-  data::JobToken token(job_id);
-  VariantTensorData data;
-  token.Encode(&data);
-  data::JobToken decoded;
-  decoded.Decode(data);
-  EXPECT_FALSE(token.is_empty());
-  EXPECT_EQ(job_id, token.job_id());
-}
+INSTANTIATE_TEST_SUITE_P(
+    MergeOptionsTest, MergeOptionsTest,
+    ::testing::ValuesIn(std::vector<MergeOptionsTestParam>{
+        // Destination is empty.
+        {"optimization_options { map_vectorization { enabled: true }}", "",
+         "optimization_options { map_vectorization { enabled: true }}"},
+        // Source and destination have the same values.
+        {"optimization_options { map_vectorization { enabled: true }}",
+         "optimization_options { map_vectorization { enabled: true }}",
+         "optimization_options { map_vectorization { enabled: true }}"},
+        // Source values override destination values.
+        {"slack: true "
+         "optimization_options { map_vectorization { enabled: true }}",
+         "slack: false "
+         "deterministic: true "
+         "optimization_options { map_vectorization { enabled: false }}",
+         "slack: true "
+         "deterministic: true "
+         "optimization_options { map_vectorization { enabled: true }}"},
+        // Values are enums.
+        {"external_state_policy: POLICY_IGNORE",
+         "external_state_policy: POLICY_FAIL",
+         "external_state_policy: POLICY_IGNORE"}}));
 
 }  // namespace tensorflow

@@ -1,21 +1,34 @@
 load("//tensorflow:tensorflow.bzl", "tf_cc_binary")
 load("//tensorflow/lite:special_rules.bzl", "tflite_portable_test_suite")
-load("//tensorflow/lite:build_def.bzl", "tflite_copts", "tflite_linkopts")
+load("//tensorflow/lite:build_def.bzl", "tflite_copts", "tflite_copts_warnings", "tflite_linkopts")
 
 package(
     default_visibility = [
         "//visibility:public",
     ],
-    licenses = ["notice"],  # Apache 2.0
+    licenses = ["notice"],
 )
 
-common_copts = ["-Wall"] + tflite_copts()
+common_copts = tflite_copts() + tflite_copts_warnings()
 
-cc_binary(
-    name = "benchmark_model",
+# We create a library for benchmark_main.cc to faciliate the creation of a
+# customized benchmark model binary that only needs linking with extra
+# dependency, e.g., enabling creating of benchmark binaries with a custom
+# delegate provider.
+cc_library(
+    name = "benchmark_model_main",
     srcs = [
         "benchmark_main.cc",
     ],
+    copts = common_copts,
+    deps = [
+        ":benchmark_tflite_model_lib",
+        "//tensorflow/lite/tools:logging",
+    ],
+)
+
+cc_binary(
+    name = "benchmark_model",
     copts = common_copts,
     linkopts = tflite_linkopts() + select({
         "//tensorflow:android": [
@@ -27,8 +40,7 @@ cc_binary(
     }),
     tags = ["builder_default_android_arm64"],
     deps = [
-        ":benchmark_tflite_model_lib",
-        "//tensorflow/lite/tools:logging",
+        ":benchmark_model_main",
     ],
 )
 
@@ -42,6 +54,7 @@ cc_binary(
         "//tensorflow:android": [
             "-pie",  # Android 5.0 and later supports only PIE
             "-lm",  # some builtin ops, e.g., tanh, need -lm
+            "-Wl,--rpath=/data/local/tmp/",  # Hexagon delegate libraries should be in /data/local/tmp
         ],
         "//conditions:default": [],
     }),
@@ -98,13 +111,13 @@ cc_test(
     deps = [
         ":benchmark_performance_options",
         ":benchmark_tflite_model_lib",
-        ":delegate_provider_hdr",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:string_util",
         "//tensorflow/lite/c:common",
         "//tensorflow/lite/testing:util",
         "//tensorflow/lite/tools:command_line_flags",
         "//tensorflow/lite/tools:logging",
+        "//tensorflow/lite/tools/delegates:delegate_provider_hdr",
         "@com_google_absl//absl/algorithm",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings:str_format",
@@ -139,18 +152,17 @@ cc_library(
     deps = [
         ":benchmark_model_lib",
         ":benchmark_utils",
-        ":coreml_delegate_provider",
-        ":delegate_provider_hdr",
         ":profiling_listener",
-        ":tflite_execution_providers",
         "//tensorflow/lite:framework",
         "//tensorflow/lite:string_util",
+        "//tensorflow/lite/c:common",
         "//tensorflow/lite/kernels:builtin_ops",
-        "//tensorflow/lite/profiling:platform_profiler",
+        "//tensorflow/lite/kernels:cpu_backend_context",
         "//tensorflow/lite/profiling:profile_summary_formatter",
         "//tensorflow/lite/profiling:profiler",
         "//tensorflow/lite/tools:logging",
-        "//tensorflow/lite/tools/evaluation:utils",
+        "//tensorflow/lite/tools/delegates:delegate_provider_hdr",
+        "//tensorflow/lite/tools/delegates:tflite_execution_providers",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings",
         "@ruy//ruy/profiler",
@@ -211,152 +223,6 @@ cc_library(
 )
 
 cc_library(
-    name = "delegate_provider_hdr",
-    hdrs = [
-        "delegate_provider.h",
-    ],
-    copts = common_copts,
-    deps = [
-        ":benchmark_params",
-        "//tensorflow/lite/c:common",
-        "//tensorflow/lite/tools:command_line_flags",
-        "//tensorflow/lite/tools:logging",
-    ],
-)
-
-# A convenient library for all inference execution providers.
-cc_library(
-    name = "tflite_execution_providers",
-    copts = tflite_copts(),
-    deps = [
-        ":default_execution_provider",
-        ":external_delegate_provider",
-        ":gpu_delegate_provider",
-        ":hexagon_delegate_provider",
-        ":nnapi_delegate_provider",
-    ] + select({
-        "//tensorflow:fuchsia": [],
-        "//tensorflow:windows": [],
-        "//conditions:default": [
-            ":xnnpack_delegate_provider",
-        ],
-    }),
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "default_execution_provider",
-    srcs = ["default_execution_provider.cc"],
-    copts = tflite_copts(),
-    linkstatic = True,
-    visibility = ["//visibility:public"],
-    deps = [
-        ":delegate_provider_hdr",
-    ],
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "gpu_delegate_provider",
-    srcs = ["gpu_delegate_provider.cc"],
-    copts = common_copts + select({
-        "//tensorflow:ios": [
-            "-xobjective-c++",
-        ],
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":delegate_provider_hdr",
-        "//tensorflow/lite/tools/evaluation:utils",
-    ] + select({
-        "//tensorflow:android": [
-            "//tensorflow/lite/delegates/gpu:delegate",
-        ],
-        "//tensorflow:ios": [
-            "//tensorflow/lite/delegates/gpu:metal_delegate",
-        ],
-        "//conditions:default": [],
-    }),
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "nnapi_delegate_provider",
-    srcs = ["nnapi_delegate_provider.cc"],
-    copts = common_copts,
-    deps = [
-        ":delegate_provider_hdr",
-        "//tensorflow/lite/tools/evaluation:utils",
-    ],
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "hexagon_delegate_provider",
-    srcs = ["hexagon_delegate_provider.cc"],
-    copts = common_copts,
-    deps = [
-        ":delegate_provider_hdr",
-        "//tensorflow/lite/tools/evaluation:utils",
-    ] + select({
-        "//tensorflow:android_arm": [
-            "//tensorflow/lite/experimental/delegates/hexagon:hexagon_delegate",
-        ],
-        "//tensorflow:android_arm64": [
-            "//tensorflow/lite/experimental/delegates/hexagon:hexagon_delegate",
-        ],
-        "//conditions:default": [],
-    }),
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "coreml_delegate_provider",
-    srcs = ["coreml_delegate_provider.cc"],
-    copts = common_copts + select({
-        "//tensorflow:ios": [
-            "-xobjective-c++",
-        ],
-        "//conditions:default": [],
-    }),
-    deps = [
-        ":delegate_provider_hdr",
-        "//tensorflow/lite/tools/evaluation:utils",
-    ] + select({
-        "//tensorflow:ios": [
-            "//tensorflow/lite/experimental/delegates/coreml:coreml_delegate",
-        ],
-        "//conditions:default": [],
-    }),
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "xnnpack_delegate_provider",
-    srcs = ["xnnpack_delegate_provider.cc"],
-    copts = tflite_copts(),
-    linkstatic = True,
-    visibility = ["//visibility:public"],
-    deps = [
-        ":delegate_provider_hdr",
-        "//tensorflow/lite/tools/evaluation:utils",
-    ],
-    alwayslink = 1,
-)
-
-cc_library(
-    name = "external_delegate_provider",
-    srcs = ["external_delegate_provider.cc"],
-    copts = tflite_copts(),
-    linkstatic = True,
-    visibility = ["//visibility:public"],
-    deps = [
-        ":delegate_provider_hdr",
-    ],
-    alwayslink = 1,
-)
-
-cc_library(
     name = "benchmark_utils",
     srcs = [
         "benchmark_utils.cc",
@@ -371,7 +237,6 @@ cc_test(
     srcs = [
         "benchmark_utils_test.cc",
     ],
-    copts = common_copts,
     deps = [
         ":benchmark_utils",
         "//tensorflow/lite/profiling:time",

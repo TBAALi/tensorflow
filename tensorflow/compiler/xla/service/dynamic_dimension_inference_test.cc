@@ -767,7 +767,7 @@ TEST_F(DynamicDimensionInferenceTest, WhileTest) {
   //  While
   auto* a_param = builder.AddInstruction(HloInstruction::CreateParameter(
       /*parameter_number=*/0, tuple_shape, "A"));
-  auto* size_param = builder.AddInstruction(HloInstruction::CreateParameter(
+  builder.AddInstruction(HloInstruction::CreateParameter(
       /*parameter_number=*/1, scalar_shape_, "size_param"));
   builder.AddInstruction(
       HloInstruction::CreateWhile(tuple_shape, condition, body, a_param));
@@ -782,37 +782,32 @@ TEST_F(DynamicDimensionInferenceTest, WhileTest) {
       DynamicParameterBinding::DynamicParameter{1, {}},
       DynamicParameterBinding::DynamicDimension{0, {1}, 0}));
 
-  // Test that dynamic dimension inference does the right thing. A lambda is
-  // used here since we want to test twice by running inference again
-  // (idempotency).
-  auto test_dynamic_dimension = [&]() {
-    HloInstruction* while_hlo = nullptr;
-    // The while hlo has been replaced, find the new one.
-    for (HloInstruction* inst : module_->entry_computation()->instructions()) {
-      if (inst->opcode() == HloOpcode::kWhile) {
-        while_hlo = inst;
-      }
-    }
-    ASSERT_NE(while_hlo, nullptr);
-    // The original while shape has 2 parameters. With dynamic size passed in
-    // as an extra parameter, the tuple should have 3 elements.
-    EXPECT_EQ(while_hlo->shape().tuple_shapes_size(), 3);
-    HloInstruction* add = nullptr;
-    for (HloInstruction* inst : while_hlo->while_body()->instructions()) {
-      if (inst->opcode() == HloOpcode::kAdd) {
-        add = inst;
-      }
-    }
-    EXPECT_NE(add, nullptr);
-    EXPECT_NE(inference_->GetDynamicSize(add, {}, 0), nullptr);
-    EXPECT_EQ(inference_->GetDynamicSize(while_hlo, {0}, 0), size_param);
-    EXPECT_EQ(inference_->GetDynamicSize(while_hlo, {1}, 0), size_param);
-  };
-
   TF_ASSERT_OK(RunInference());
-  test_dynamic_dimension();
-  TF_ASSERT_OK(RunInference());
-  test_dynamic_dimension();
+  HloInstruction* while_hlo = nullptr;
+  // The while hlo has been replaced, find the new one.
+  for (HloInstruction* inst : module_->entry_computation()->instructions()) {
+    if (inst->opcode() == HloOpcode::kWhile) {
+      while_hlo = inst;
+    }
+  }
+  ASSERT_NE(while_hlo, nullptr);
+  // The original while shape has 2 parameters. With dynamic size, the tuple
+  // should have 4 elements (We don't deduplicate the arguments).
+  EXPECT_EQ(while_hlo->shape().tuple_shapes_size(), 4);
+  HloInstruction* add_inst = nullptr;
+  for (HloInstruction* inst : while_hlo->while_body()->instructions()) {
+    if (inst->opcode() == HloOpcode::kAdd) {
+      add_inst = inst;
+    }
+  }
+  EXPECT_NE(add_inst, nullptr);
+  EXPECT_NE(inference_->GetDynamicSize(add_inst, {}, 0), nullptr);
+  EXPECT_NE(inference_->GetDynamicSize(
+                module_->entry_computation()->root_instruction(), {0}, 0),
+            nullptr);
+  EXPECT_NE(inference_->GetDynamicSize(
+                module_->entry_computation()->root_instruction(), {1}, 0),
+            nullptr);
 }
 
 TEST_F(DynamicDimensionInferenceTest, ConditionalInputTest) {
@@ -1251,6 +1246,61 @@ TEST_F(DynamicDimensionInferenceTest, InfersCustomOp) {
   TF_ASSERT_OK(RunInference(handler));
 
   EXPECT_TRUE(handler_called);
+}
+
+TEST_F(DynamicDimensionInferenceTest, DynamicReshapeOp) {
+  auto builder = HloComputation::Builder(TestName());
+  auto input = builder.AddInstruction(HloInstruction::CreateParameter(
+      0, ShapeUtil::MakeShape(F32, {9}), "data_input"));
+  auto six = builder.AddInstruction(
+      HloInstruction::CreateConstant(LiteralUtil::CreateR0<int32>(6)));
+  // Creates an input of shape [<=9], dynamic size is 6.
+  auto dynamic_input =
+      builder.AddInstruction(HloInstruction::CreateSetDimensionSize(
+          ShapeUtil::MakeShape(F32, {9}, {true}), input, six, 0));
+  auto dynamic_size = builder.AddInstruction(HloInstruction::CreateParameter(
+      1, ShapeUtil::MakeShape(S32, {}), "size_param"));
+  auto three = builder.AddInstruction(
+      HloInstruction::CreateConstant(LiteralUtil::CreateR0<int32>(3)));
+
+  // Reshape [<=9] into [3, <=3]
+
+  auto dynamic_reshape =
+      builder.AddInstruction(HloInstruction::CreateDynamicReshape(
+          ShapeUtil::MakeShape(F32, {3, 3}, {false, true}), dynamic_input,
+          {three, dynamic_size}));
+
+  module_->AddEntryComputation(builder.Build());
+
+  TF_ASSERT_OK(RunInference());
+  EXPECT_EQ(inference_->GetDynamicSize(dynamic_reshape, {}, 0), nullptr);
+  EXPECT_EQ(inference_->GetDynamicSize(dynamic_reshape, {}, 1), dynamic_size);
+}
+
+TEST_F(DynamicDimensionInferenceTest, ReshapeOpWithMultipleDynamicDimensions) {
+  auto builder = HloComputation::Builder(TestName());
+  auto input = builder.AddInstruction(HloInstruction::CreateParameter(
+      0, ShapeUtil::MakeShape(F32, {9, 2}), "data_input"));
+  auto six = builder.AddInstruction(
+      HloInstruction::CreateConstant(LiteralUtil::CreateR0<int32>(6)));
+  input = builder.AddInstruction(HloInstruction::CreateSetDimensionSize(
+      ShapeUtil::MakeShape(F32, {9, 2}, {true, false}), input, six, 0));
+  auto one = builder.AddInstruction(
+      HloInstruction::CreateConstant(LiteralUtil::CreateR0<int32>(1)));
+  input = builder.AddInstruction(HloInstruction::CreateSetDimensionSize(
+      ShapeUtil::MakeShape(F32, {9, 2}, {true, true}), input, one, 1));
+
+  // Reshape [<=9, <=2] into [<=9, 1, <=2]
+
+  auto dynamic_reshape = builder.AddInstruction(HloInstruction::CreateReshape(
+      ShapeUtil::MakeShape(F32, {9, 1, 2}, {true, false, true}), input));
+
+  module_->AddEntryComputation(builder.Build());
+
+  TF_ASSERT_OK(RunInference());
+  EXPECT_EQ(inference_->GetDynamicSize(dynamic_reshape, {}, 0), six);
+  EXPECT_EQ(inference_->GetDynamicSize(dynamic_reshape, {}, 1), nullptr);
+  EXPECT_EQ(inference_->GetDynamicSize(dynamic_reshape, {}, 2), one);
 }
 
 }  // namespace

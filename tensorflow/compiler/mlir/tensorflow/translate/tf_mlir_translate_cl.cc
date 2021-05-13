@@ -21,6 +21,7 @@ limitations under the License.
 
 using llvm::cl::opt;
 
+// Import options.
 // NOLINTNEXTLINE
 opt<std::string> input_arrays(
     "tf-input-arrays", llvm::cl::desc("Input tensor names, separated by ','"),
@@ -109,3 +110,17 @@ opt<bool> graph_as_function("tf-graph-as-function",
 opt<bool> upgrade_legacy("tf-upgrade-legacy",
                          llvm::cl::desc("Upgrade legacy TF graph behavior"),
                          llvm::cl::init(false));
+
+// NOLINTNEXTLINE
+opt<bool> enable_shape_inference(
+    "tf-enable-shape-inference-on-import",
+    llvm::cl::desc("Enable shape inference on import (temporary)"),
+    llvm::cl::init(false));
+
+// Export options.
+// NOLINTNEXTLINE
+opt<bool> export_entry_func_to_flib(
+    "tf-export-entry-func-to-flib",
+    llvm::cl::desc(
+        "Export entry function to function library instead of graph"),
+    llvm::cl::init(false));

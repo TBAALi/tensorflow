@@ -83,10 +83,14 @@ The following optional parameters can be used to modify the inference runtime:
     assumes that `libhexagon_interface.so` and Qualcomm libraries lie in
     `/data/local/tmp`.
 
-This script also supports all applicable runtime/delegate arguments supported on
-the `benchmark_model` tool. If there is any conflict (for example, `num_threads`
-in `benchmark_model` vs `num_interpreter_threads` here), the parameters of this
+This script also supports runtime/delegate arguments introduced by the
+[delegate registrar](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/lite/tools/delegates).
+If there is any conflict (for example, `num_threads` vs
+`num_interpreter_threads` here), the parameters of this
 script are given precedence.
+
+Note, one could specify `--help` when launching the binary to see the full list
+of supported arguments.
 
 ### Debug Mode
 
@@ -134,7 +138,7 @@ above, and you we still need an output labels file.
 
 To compute mAP in a consistent and interpretable way, we utilize the same 2014
 COCO 'minival' dataset that is mentioned in the
-[Tensorflow detection model zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/detection_model_zoo.md).
+[Tensorflow detection model zoo](https://github.com/tensorflow/models/blob/master/research/object_detection/g3doc/tf1_detection_zoo.md).
 
 The links to download the components of the validation set are:
 
@@ -155,7 +159,7 @@ To do so, we utilize the `preprocess_coco_minival` Python binary as follows:
 bazel run //tensorflow/lite/tools/evaluation/tasks/coco_object_detection:preprocess_coco_minival -- \
   --images_folder=/path/to/val2014 \
   --instances_file=/path/to/instances_val2014.json \
-  --whitelist_file=/path/to/minival_whitelist.txt \
+  --allowlist_file=/path/to/minival_allowlist.txt \
   --output_folder=/path/to/output/folder
 
 ```

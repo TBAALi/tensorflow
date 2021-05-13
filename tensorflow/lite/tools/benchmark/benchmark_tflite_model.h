@@ -74,6 +74,9 @@ class BenchmarkTfLiteModel : public BenchmarkModel {
   // Allow subclasses to create a customized Op resolver during init.
   virtual std::unique_ptr<tflite::OpResolver> GetOpResolver() const;
 
+  // Allow subclass to initialize a customized tflite interpereter.
+  virtual TfLiteStatus InitInterpreter();
+
   // Create a BenchmarkListener that's specifically for TFLite profiling if
   // necessary.
   virtual std::unique_ptr<BenchmarkListener> MayCreateProfilingListener() const;
@@ -82,6 +85,7 @@ class BenchmarkTfLiteModel : public BenchmarkModel {
 
   std::unique_ptr<tflite::FlatBufferModel> model_;
   std::unique_ptr<tflite::Interpreter> interpreter_;
+  std::unique_ptr<tflite::ExternalCpuBackendContext> external_context_;
 
  private:
   // Implement type erasure with unique_ptr with custom deleter.
@@ -118,6 +122,7 @@ class BenchmarkTfLiteModel : public BenchmarkModel {
   std::vector<InputTensorData> inputs_data_;
   std::unique_ptr<BenchmarkListener> profiling_listener_ = nullptr;
   std::unique_ptr<BenchmarkListener> ruy_profiling_listener_ = nullptr;
+  std::unique_ptr<BenchmarkListener> interpreter_state_printer_ = nullptr;
   std::mt19937 random_engine_;
   std::vector<Interpreter::TfLiteDelegatePtr> owned_delegates_;
   // Always TFLITE_LOG the benchmark result.

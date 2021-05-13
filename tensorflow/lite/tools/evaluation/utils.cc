@@ -75,7 +75,7 @@ TfLiteStatus GetSortedFileNames(
     while ((ent = readdir(dir)) != nullptr) {
       if (ent->d_type == DT_DIR) continue;
       std::string filename(std::string(ent->d_name));
-      size_t lastdot = filename.find_last_of(".");
+      size_t lastdot = filename.find_last_of('.');
       std::string ext = lastdot != std::string::npos ? filename.substr(lastdot)
                                                      : std::string();
       std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -93,7 +93,6 @@ TfLiteStatus GetSortedFileNames(
 }
 #endif
 
-// TODO(b/138448769): Migrate delegate helper APIs to lite/testing.
 TfLiteDelegatePtr CreateNNAPIDelegate() {
 #if defined(__ANDROID__)
   return TfLiteDelegatePtr(
@@ -101,7 +100,7 @@ TfLiteDelegatePtr CreateNNAPIDelegate() {
       // NnApiDelegate() returns a singleton, so provide a no-op deleter.
       [](TfLiteDelegate*) {});
 #else
-  return TfLiteDelegatePtr(nullptr, [](TfLiteDelegate*) {});
+  return CreateNullDelegate();
 #endif  // defined(__ANDROID__)
 }
 
@@ -116,15 +115,15 @@ TfLiteDelegatePtr CreateNNAPIDelegate(StatefulNnApiDelegate::Options options) {
 #endif  // defined(__ANDROID__)
 }
 
-#if defined(__ANDROID__)
+#if TFLITE_SUPPORTS_GPU_DELEGATE
 TfLiteDelegatePtr CreateGPUDelegate(TfLiteGpuDelegateOptionsV2* options) {
   return TfLiteDelegatePtr(TfLiteGpuDelegateV2Create(options),
                            &TfLiteGpuDelegateV2Delete);
 }
-#endif  // defined(__ANDROID__)
+#endif  // TFLITE_SUPPORTS_GPU_DELEGATE
 
 TfLiteDelegatePtr CreateGPUDelegate() {
-#if defined(__ANDROID__)
+#if TFLITE_SUPPORTS_GPU_DELEGATE
   TfLiteGpuDelegateOptionsV2 options = TfLiteGpuDelegateOptionsV2Default();
   options.inference_priority1 = TFLITE_GPU_INFERENCE_PRIORITY_MIN_LATENCY;
   options.inference_preference =
@@ -133,7 +132,7 @@ TfLiteDelegatePtr CreateGPUDelegate() {
   return CreateGPUDelegate(&options);
 #else
   return CreateNullDelegate();
-#endif  // defined(__ANDROID__)
+#endif  // TFLITE_SUPPORTS_GPU_DELEGATE
 }
 
 TfLiteDelegatePtr CreateHexagonDelegate(
@@ -169,8 +168,7 @@ TfLiteDelegatePtr CreateHexagonDelegate(
 }
 #endif
 
-// TODO(b/149248802): include XNNPACK delegate when the issue is resolved.
-#if defined(__Fuchsia__) || defined(TFLITE_WITHOUT_XNNPACK)
+#if defined(TFLITE_WITHOUT_XNNPACK)
 TfLiteDelegatePtr CreateXNNPACKDelegate(int num_threads) {
   return CreateNullDelegate();
 }

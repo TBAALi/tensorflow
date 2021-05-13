@@ -19,7 +19,31 @@ limitations under the License.
 #define TFL_OP_INTERFACES
 
 include "mlir/IR/OpBase.td"
-include "tensorflow/compiler/mlir/lite/experimental/tfl_hardware_interfaces.td"
+
+def TFL_Dialect : Dialect {
+  let name = "tfl";
+
+  let description = [{
+    The TensorFlow Lite dialect.
+
+    This dialect maps to TensorFlow Lite operations.
+
+    Invariants:
+
+    * All values are of Tensor type (in particular, scalars are
+      represented using zero-dimensional tensors);
+  }];
+
+  let cppNamespace = "::mlir::TFL";
+}
+
+// Attributes used for encoding sparse tensors.
+// Please find detailed explanation of these parameters in the TFLite schema.
+def TFL_DT_Dense : StrEnumAttrCase<"DENSE", 0>;
+def TFL_DT_SparseCSR : StrEnumAttrCase<"SPARSE_CSR", 1>;
+
+def TFL_DimensionTypeAttr : StrEnumAttr<
+    "DimensionType", "dimension type", [TFL_DT_Dense, TFL_DT_SparseCSR]>;
 
 //===----------------------------------------------------------------------===//
 // TFL op interface for stateful operands.
@@ -41,22 +65,6 @@ def TFL_StatefulOp : OpInterface<"StatefulOpInterface"> {
 }
 
 //===----------------------------------------------------------------------===//
-// TFL op interface for output channel index.
-
-def TFL_ChannelDimIndexInterface : OpInterface<"ChannelDimIndexInterface"> {
-  let description = [{
-    Interface for defining the index of out channel index.
-  }];
-
-  let methods = [
-    InterfaceMethod<
-      [{Returns the dimension index of the output channels.}],
-      "int", "GetChannelDimIndex", (ins)
-    >,
-  ];
-}
-
-//===----------------------------------------------------------------------===//
 // TFL op interface for sparse operands.
 
 def TFL_SparseOp : OpInterface<"SparseOpInterface"> {
@@ -68,6 +76,14 @@ def TFL_SparseOp : OpInterface<"SparseOpInterface"> {
     InterfaceMethod<
       [{Returns the indices of sparse operands.}],
       "std::vector<int>", "GetSparseOperands", (ins)
+    >,
+    InterfaceMethod<
+      [{Returns the supported block size of float sparse operands.}],
+      "std::vector<std::vector<int>>", "GetFloatBlockSize", (ins)
+    >,
+    InterfaceMethod<
+      [{Returns the supported block size of quantized sparse operands.}],
+      "std::vector<std::vector<int>>", "GetQuantizedBlockSize", (ins)
     >,
   ];
 }
@@ -86,10 +102,25 @@ def TFL_RuntimeVerification : OpInterface<"TflRuntimeVerifyOpInterface"> {
   let methods = [
     StaticInterfaceMethod<
       [{Returns whether the op's operands/results are supported by runtime.}],
-      "LogicalResult", "VerifyTflRuntimeConstraints",
-      (ins "Operation*":$op, "bool":$failure_on_operand_type_mismatch)
+      "LogicalResult", "VerifyTflRuntimeConstraints", (ins "Operation*":$op)
     >,
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// TFL arithmetic count interface.
+
+def TFL_ArithmeticCount : OpInterface<"TflArithmeticCountOpInterface"> {
+  let description = [{
+    Interface for TFLite ops to calculate arithmetic count (Multiply-Add Count).
+  }];
+
+  let methods = [
+    StaticInterfaceMethod<
+      [{Returns an integer representing the op's arithmetic count (Multiply-Add
+      Count), return -1 if the arithmetic count cannot be determined.}],
+       "int64_t", "GetArithmeticCount", (ins "Operation*":$op)
+    >,
+  ];
+}
 #endif // TFL_OP_INTERFACES

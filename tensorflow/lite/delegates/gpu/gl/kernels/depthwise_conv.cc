@@ -38,6 +38,10 @@ class DepthwiseConvolution : public NodeShader {
  public:
   absl::Status GenerateCode(const GenerationContext& ctx,
                             GeneratedCode* generated_code) const final {
+    if (ctx.input_shapes.size() != 1) {
+      return absl::UnimplementedError(
+          "DepthWise Convolution does not support more than 1 runtime tensor");
+    }
     const auto& attr =
         absl::any_cast<const DepthwiseConvolution2DAttributes&>(ctx.op_attr);
     auto weights = attr.weights.shape;
@@ -54,7 +58,7 @@ class DepthwiseConvolution : public NodeShader {
           {"dilation_h", attr.dilations.h},
           {"kernel_w", weights.w},
           {"kernel_h", weights.h},
-          {"src_depth", IntegralDivideRoundUp(weights.i, 4)},
+          {"src_depth", DivideRoundUp(weights.i, 4)},
           {"channel_multiplier", weights.o},
           {"stride", int2(attr.strides.w, attr.strides.h)},
       };
@@ -71,7 +75,7 @@ class DepthwiseConvolution : public NodeShader {
           {"input_data_0_w", static_cast<int>(ctx.input_shapes[0][2])},
           {"offsets_count", offsets_count},
           {"offsets", offsets},
-          {"src_depth", IntegralDivideRoundUp(weights.i, 4)},
+          {"src_depth", DivideRoundUp(weights.i, 4)},
           {"channel_multiplier", weights.o},
           {"stride", int2(attr.strides.w, attr.strides.h)},
       };
@@ -137,7 +141,7 @@ class DepthwiseConvolution : public NodeShader {
         /*workload=*/uint3(),
         /*workgroup=*/
         GetIdealWorkgroupIfPossible(
-            ctx.gpu_info->gpu_model, OperationType::DEPTHWISE_CONVOLUTION,
+            *ctx.gpu_info, OperationType::DEPTHWISE_CONVOLUTION,
             HW(attr.weights.shape.h, attr.weights.shape.w), attr.strides,
             OHWI(attr.weights.shape.o, ctx.input_shapes[0][1],
                  ctx.input_shapes[0][2], ctx.input_shapes[0][3])),
